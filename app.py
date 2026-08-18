@@ -12,7 +12,7 @@ WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 
 # Replace this with your actual Google Spreadsheet ID
-SPREADSHEET_ID = "YOUR_SPREADSHEET_ID_HERE"
+SPREADSHEET_ID = "1iVDKEyo1R8sUOd5h_XpEdXWYgBbj16Kl"
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv"
 
 client = Groq(api_key=GROQ_API_KEY)
