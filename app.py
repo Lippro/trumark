@@ -9,7 +9,7 @@ app = Flask(__name__)
 VERIFY_TOKEN = "trumark_books_123"
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = "255733130059"
+PHONE_NUMBER_ID = "1331551090031101"
 
 # Replace this with your actual Google Spreadsheet ID
 SPREADSHEET_ID = "1iVDKEyo1R8sUOd5h_XpEdXWYgBbj16Kl"
@@ -60,9 +60,22 @@ def webhook():
                 print(f"User ({sender_id}) said: {incoming_msg}")
 
                 # Get real-time inventory from Google Sheet
-                live_inventory = fetch_live_inventory()
-
-                system_prompt = f"""
+                def fetch_live_inventory():
+    """Fetches real-time inventory from Google Sheets."""
+    try:
+        df = pd.read_csv(CSV_URL)
+        
+        # Clean up hidden spaces in column headers to prevent KeyErrors
+        df.columns = df.columns.str.strip()
+        
+        # Convert spreadsheet rows into a readable summary for AI
+        inventory_summary = ""
+        for _, row in df.iterrows():
+            inventory_summary += f"- {row['Title']} by {row['Author']}: {row['Price']} TZS (Stock: {row['Stock']})\n"
+        return inventory_summary
+    except Exception as e:
+        print(f"Error fetching inventory from Google Sheets: {e}")
+        return "Inventory data currently unavailable."
 You are the official AI assistant for Trumark Bookshop & Stationery.
 
 === STORE INFORMATION ===
