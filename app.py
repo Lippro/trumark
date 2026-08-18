@@ -1,73 +1,35 @@
-import os
-import requests
-from flask import Flask, request
-from groq import Groq
+# 1. Ask Groq for an answer using Custom Knowledge
+                system_prompt = """
+You are the official AI assistant for Trumark Books, located in Dar es Salaam.
+Your job is to assist customers with book inquiries, store hours, and orders.
 
-app = Flask(__name__)
+=== STORE INFORMATION ===
+- Store Name: Trumark Books
+- Location: Sam Nujoma Road, Opposite Mlimani City, Dar es Salaam
+- Operating Hours: Monday - Saturday (8:00 AM - 7:00 PM), Sunday (10:00 AM - 4:00 PM)
+- Phone/WhatsApp: +255 700 000 000
 
-VERIFY_TOKEN = "trumark_books_123"
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = "1331551090031101"
+=== INVENTORY & FEATURED BOOKS ===
+1. "The Atomic Habits" by James Clear - 45,000 TZS (In Stock)
+2. "Rich Dad Poor Dad" by Robert Kiyosaki - 35,000 TZS (In Stock)
+3. "The Psychology of Money" by Morgan Housel - 40,000 TZS (In Stock)
+4. "Things Fall Apart" by Chinua Achebe - 25,000 TZS (In Stock)
 
-client = Groq(api_key=GROQ_API_KEY)
+=== DELIVERY & PAYMENT POLICIES ===
+- Delivery: Same-day delivery within Dar es Salaam for 5,000 TZS. Upcountry shipping via bus service (10,000 TZS).
+- Payment Methods: M-Pesa, Tigo Pesa, Airtel Money, or Cash on Delivery (Dar es Salaam only).
 
-@app.route('/', methods=['GET'])
-def home():
-    return "Trumark Bot is Live!", 200
+=== BOT GUIDELINES ===
+- Be polite, helpful, and concise (WhatsApp messages should be easy to read).
+- Use clear formatting like bullet points or bold text for book names.
+- If a user asks for a book NOT in stock, tell them we can special-order it within 3 business days.
+"""
 
-@app.route('/webhook', methods=['GET', 'POST'])
-def webhook():
-    if request.method == 'GET':
-        mode = request.args.get("hub.mode")
-        token = request.args.get("hub.verify_token")
-        challenge = request.args.get("hub.challenge")
-
-        if mode == "subscribe" and token == VERIFY_TOKEN:
-            return challenge, 200
-        return "Failed", 403
-
-    elif request.method == 'POST':
-        data = request.get_json()
-        
-        try:
-            entry = data['entry'][0]
-            changes = entry['changes'][0]
-            value = changes['value']
-            
-            if 'messages' in value:
-                incoming_msg = value['messages'][0]['text']['body']
-                sender_id = value['messages'][0]['from']
-                
-                print(f"User ({sender_id}) said: {incoming_msg}")
-
-                # 1. Ask Groq for an answer
                 response = client.chat.completions.create(
-                    model="openai/gpt-oss-120b",
+                    model="openai/gpt-oss-20b",
                     messages=[
-                        {"role": "system", "content": "You are an enthusiastic AI assistant for Trumark Books. Keep responses helpful, direct, and short for WhatsApp."},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": incoming_msg}
                     ],
                     max_tokens=300
                 )
-                reply_text = response.choices[0].message.content
-
-                # 2. Send response back to WhatsApp
-                url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-                headers = {
-                    "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-                    "Content-Type": "application/json"
-                }
-                payload = {
-                    "messaging_product": "whatsapp",
-                    "to": sender_id,
-                    "type": "text",
-                    "text": {"body": reply_text}
-                }
-                wa_response = requests.post(url, json=payload, headers=headers)
-                print(f"WhatsApp Delivery Status: {wa_response.text}")
-
-        except Exception as e:
-            print(f"Error processing message: {e}")
-            
-        return "OK", 200
