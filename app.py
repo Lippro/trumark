@@ -1,12 +1,21 @@
 import os
+import requests
 from flask import Flask, request
 from groq import Groq
 
 app = Flask(__name__)
 
 VERIFY_TOKEN = "trumark_books_123"
-# Initialize Groq client using your saved environment variable
-client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
+PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
+
+client = Groq(api_key=GROQ_API_KEY)
+
+# Simple homepage check
+@app.route('/', methods=['GET'])
+def home():
+    return "Trumark Bot is Live!", 200
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
@@ -31,22 +40,32 @@ def webhook():
                 incoming_msg = value['messages'][0]['text']['body']
                 sender_id = value['messages'][0]['from']
                 
-                print(f"User ({sender_id}) said: {incoming_msg}")
-                
-                # Ask Groq (Llama 3) for a response
+                # 1. Ask Groq (Llama 3) for an answer
                 response = client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=[
-                        {"role": "system", "content": "You are an enthusiastic AI assistant for Trumark Books. Keep responses helpful, direct, and concise for WhatsApp."},
+                        {"role": "system", "content": "You are an enthusiastic AI assistant for Trumark Books. Keep responses helpful, direct, and short for WhatsApp."},
                         {"role": "user", "content": incoming_msg}
                     ],
                     max_tokens=300
                 )
-                
                 reply_text = response.choices[0].message.content
-                print(f"Bot replied: {reply_text}")
+
+                # 2. Send response back to WhatsApp
+                url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+                headers = {
+                    "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "messaging_product": "whatsapp",
+                    "to": sender_id,
+                    "type": "text",
+                    "text": {"body": reply_text}
+                }
+                requests.post(url, json=payload, headers=headers)
 
         except Exception as e:
-            print(f"Error processing message: {e}")
+            print(f"Error: {e}")
             
         return "OK", 200
