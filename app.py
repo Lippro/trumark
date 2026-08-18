@@ -42,7 +42,7 @@ def webhook():
                 
                 # 1. Ask Groq (Llama 3) for an answer
                 response = client.chat.completions.create(
-                    model="llama3-8b-8192",
+                    model="openai/gpt-oss-20b",
                     messages=[
                         {"role": "system", "content": "You are an enthusiastic AI assistant for Trumark Books. Keep responses helpful, direct, and short for WhatsApp."},
                         {"role": "user", "content": incoming_msg}
