@@ -12,7 +12,6 @@ PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# Simple homepage check
 @app.route('/', methods=['GET'])
 def home():
     return "Trumark Bot is Live!", 200
@@ -40,9 +39,11 @@ def webhook():
                 incoming_msg = value['messages'][0]['text']['body']
                 sender_id = value['messages'][0]['from']
                 
-                # 1. Ask Groq (Llama 3) for an answer
+                print(f"User ({sender_id}) said: {incoming_msg}")
+
+                # 1. Ask Groq for an answer
                 response = client.chat.completions.create(
-                    model="openai/gpt-oss-20b",
+                    model="openai/gpt-oss-120b",
                     messages=[
                         {"role": "system", "content": "You are an enthusiastic AI assistant for Trumark Books. Keep responses helpful, direct, and short for WhatsApp."},
                         {"role": "user", "content": incoming_msg}
@@ -63,9 +64,10 @@ def webhook():
                     "type": "text",
                     "text": {"body": reply_text}
                 }
-                requests.post(url, json=payload, headers=headers)
+                wa_response = requests.post(url, json=payload, headers=headers)
+                print(f"WhatsApp Delivery Status: {wa_response.text}")
 
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Error processing message: {e}")
             
         return "OK", 200
