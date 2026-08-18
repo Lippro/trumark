@@ -8,7 +8,7 @@ app = Flask(__name__)
 VERIFY_TOKEN = "trumark_books_123"
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
+PHONE_NUMBER_ID = "255733130059"
 
 client = Groq(api_key=GROQ_API_KEY)
 
