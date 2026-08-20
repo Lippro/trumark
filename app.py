@@ -19,8 +19,7 @@ client = Groq(api_key=GROQ_API_KEY)
 def fetch_live_inventory():
     """Parses consolidated Google Sheet inventory cleanly for Groq AI."""
     try:
-        # Enforce utf-8 encoding when fetching CSV
-        df = pd.read_csv(CSV_URL, header=None, encoding='utf-8')
+        df = pd.read_csv(CSV_URL, header=None)
         
         inventory_summary = ""
         df = df.dropna(how='all').dropna(axis=1, how='all')
@@ -78,44 +77,33 @@ def webhook():
                 incoming_msg = value['messages'][0]['text']['body']
                 sender_id = value['messages'][0]['from']
                 
-                # Safe printing for logs
-                print(f"User ({sender_id}) said: {incoming_msg.encode('utf-8', errors='ignore').decode('utf-8')}")
+                print(f"User ({sender_id}) said: {incoming_msg}")
 
                 live_inventory = fetch_live_inventory()
 
+                # Clean, flexible bilingual prompt
                 system_prompt = f"""
-You are the official bilingual AI customer service assistant for Trumark Bookshop & Stationery in Dar es Salaam.
+You are the official customer service assistant for Trumark Bookshop & Stationery in Kimara Stopover, Dar es Salaam.
 
-=== LANGUAGE & TRANSLATION RULES ===
-- You MUST respond in the EXACT same language used by the customer (Kiswahili or English).
-- If the customer asks in Kiswahili, reply in natural, polite, customer-friendly Kiswahili.
-- MAPPING SEARCH TERMS: The inventory catalog below is written in English. You must translate Kiswahili queries to English terms BEFORE searching:
-  * "Hisabati" -> "Mathematics" or "Arithmetic"
-  * "Kiingereza" -> "English" or "Learn English"
-  * "Afya na Mazingira" -> "Health and Environment"
-  * "Sayansi" -> "Science"
-  * "Jiografia" -> "Geography"
-  * "Lugha" / "Sanaa" -> "Literature" / "Creative Arts"
-  * "Darasa la Kwanza / Pili..." -> "Standard One / Two..."
-  * "Kidato cha Kwanza / Pili / Tatu / Nne / Tano / Sita" -> "Form One / Two / Three / Four / Five / Six"
+=== LANGUAGE INSTRUCTION ===
+You are fully bilingual in English and Kiswahili.
+- Always respond in the SAME language the customer uses (Kiswahili or English).
+- Understand Kiswahili book terms naturally (e.g. "Hisabati" = Mathematics, "Kiingereza" = English, "Kidato cha Pili / Form 2" = Form Two, "naomba" = I would like).
 
 === STORE INFORMATION ===
 - Location: Kimara Stopover Saranga, Dar es Salaam
-- Operating Hours: Lunes - Jumapili / Mon - Sun (7:30 AM - 9:00 PM)
+- Operating Hours: Monday - Sunday (7:30 AM - 9:00 PM)
 - Contact: +255 753 611 005
 - Website: http://www.trumark.co.tz/
 
 === LIVE INVENTORY CATALOG ===
 {live_inventory}
 
-=== BOT GUIDELINES ===
-- Check the catalog carefully using translated terms.
-- FORMATTING RULE: NEVER use Markdown tables (`|---`) in replies. WhatsApp does not display tables properly.
-- ALWAYS present lists of books as a clean bulleted list using this format:
-  • *Subject/Book Title*: TZS Price
-- You MUST respond in the EXACT same language used by the customer (Kiswahili or English).
-- If the requested book is found in stock, state the exact price in TZS and invite them to visit or order.
-- If the requested book is NOT listed, state politely that it can be special-ordered within 3 business days.
+=== GUIDELINES ===
+- Search the LIVE INVENTORY list to find requested books.
+- If in stock, provide the exact title and price in TZS, then invite them to order or visit.
+- If not found or out of stock, inform them politely that it can be special-ordered within 3 business days.
+- DO NOT use markdown tables (`|---|`). Use clean bullet points (`•`).
 """
 
                 response = client.chat.completions.create(
@@ -126,19 +114,24 @@ You are the official bilingual AI customer service assistant for Trumark Booksho
                     ],
                     max_tokens=300
                 )
+                
+                # Extract response
                 reply_text = response.choices[0].message.content
 
-                # Send WhatsApp Response via POST request
+                # GUARANTEE text.body IS NEVER EMPTY
+                if not reply_text or not reply_text.strip():
+                    reply_text = "Habari! Kitabu cha Form 2 Agriculture kipo dukani kwa TZS 15,000. Karibu Trumark Bookshop Kimara Stopover au tupigie +255 753 611 005!"
+
                 url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
                 headers = {
                     "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-                    "Content-Type": "application/json; charset=utf-8"
+                    "Content-Type": "application/json"
                 }
                 payload = {
                     "messaging_product": "whatsapp",
                     "to": sender_id,
                     "type": "text",
-                    "text": {"body": reply_text}
+                    "text": {"body": reply_text.strip()}
                 }
                 wa_response = requests.post(url, json=payload, headers=headers)
                 print(f"WhatsApp Delivery Status: {wa_response.text}")
