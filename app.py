@@ -21,6 +21,10 @@ def fetch_live_inventory():
     """Fetches real-time inventory from Google Sheets."""
     try:
         df = pd.read_csv(CSV_URL)
+        
+        # Clean up hidden spaces in column headers to prevent KeyErrors
+        df.columns = df.columns.str.strip()
+        
         # Convert spreadsheet rows into a readable summary for AI
         inventory_summary = ""
         for _, row in df.iterrows():
@@ -81,7 +85,7 @@ You are the official AI assistant for Trumark Bookshop & Stationery.
 === STORE INFORMATION ===
 - Location: Kimara Stopover Saranga, Dar es Salaam
 - Operating Hours: Monday – Sunday (7:30 AM – 9:00 PM)
-- Contact: +255 765 767 696
+- Contact: +255 753 611 005
 - Website: http://www.trumark.co.tz/
 
 === LIVE INVENTORY CATALOG (REAL-TIME DATA) ===
