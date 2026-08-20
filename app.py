@@ -18,17 +18,40 @@ CSV_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=
 client = Groq(api_key=GROQ_API_KEY)
 
 def fetch_live_inventory():
-    """Fetches real-time inventory from Google Sheets."""
+    """Fetches real-time inventory from Google Sheets, ignoring missing headers."""
     try:
-        df = pd.read_csv(CSV_URL)
+        # Read the CSV without expecting specific headers
+        df = pd.read_csv(CSV_URL, header=None)
         
-        # Clean up hidden spaces in column headers to prevent KeyErrors
-        df.columns = df.columns.str.strip()
-        
-        # Convert spreadsheet rows into a readable summary for AI
         inventory_summary = ""
-        for _, row in df.iterrows():
-            inventory_summary += f"- {row['Title']} by {row['Author']}: {row['Price']} TZS (Stock: {row['Stock']})\n"
+        # Drop completely empty rows and columns
+        df = df.dropna(how='all').dropna(axis=1, how='all')
+        
+        # Iterate through rows and find valid items (Subject + Price)
+        for index, row in df.iterrows():
+            # Filter out empty cells and convert to strings
+            row_vals = [str(x).strip() for x in row.values if pd.notna(x)]
+            
+            if len(row_vals) >= 2:
+                # The price is usually the last column
+                possible_price = row_vals[-1].replace(',', '').replace('.0', '')
+                
+                # If the last item is a price (a number over 500)
+                if possible_price.isdigit() and int(possible_price) > 500:
+                    title = " ".join(row_vals[:-1])
+                    
+                    # Remove the row number (like '1', '2') from the beginning of the title
+                    if title.split(" ")[0].isdigit():
+                        title = " ".join(title.split(" ")[1:])
+                        
+                    # Skip summary/total rows
+                    if "TOTAL" not in title.upper():
+                        # Assume stock is available since it's on the price list
+                        inventory_summary += f"- {title}: {possible_price} TZS (In Stock)\n"
+                        
+        if not inventory_summary:
+            return "Inventory data currently unavailable (No valid items found)."
+            
         return inventory_summary
     except Exception as e:
         print(f"Error fetching inventory from Google Sheets: {e}")
