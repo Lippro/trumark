@@ -5,8 +5,6 @@ import pandas as pd
 from datetime import datetime
 from flask import Flask, request, render_template_string, redirect, url_for, session
 from groq import Groq
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "trumark_secret_key_987")
@@ -29,9 +27,14 @@ CONVERSATIONS = {}
 def get_gspread_client():
     """Connects to Google Sheets using the JSON credentials stored in Render."""
     try:
+        import gspread
+        from oauth2client.service_account import ServiceAccountCredentials
+        
         creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
         if not creds_json:
+            print("ERROR: GOOGLE_CREDENTIALS_JSON environment variable is missing!")
             return None
+        
         creds_dict = json.loads(creds_json)
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -53,12 +56,37 @@ def log_order_to_sheet(customer_number, items_requested):
                 worksheet.append_row(["Timestamp", "Customer WhatsApp Number", "Item(s)", "Status"])
             
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            worksheet.append_row([now_str, customer_number, items_requested, "Pending"])
-            print(f"SUCCESS: Order logged for {customer_number}")
+            worksheet.append_row([now_str, str(customer_number), items_requested, "Pending"])
+            print(f"SUCCESS: Order logged to Google Sheet for {customer_number}")
             return True
+        else:
+            print("FAILED: Could not authenticate with Google Sheets.")
     except Exception as e:
         print(f"Error logging order to sheet: {e}")
     return False
+
+def send_whatsapp_message(to_number, text_content):
+    """Sends a WhatsApp text message via Meta Graph API."""
+    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "text",
+        "text": {"body": text_content}
+    }
+    res = requests.post(url, json=payload, headers=headers)
+    print(f"WhatsApp Delivery Status: {res.text}")
+    return res
+
+def send_owner_notification(customer_number, items):
+    """Sends an immediate order notification alert to the shop owner's WhatsApp."""
+    if OWNER_PHONE_NUMBER:
+        msg = f"🚨 *NEW CONFIRMED ORDER!*\n\n• *Customer:* +{customer_number}\n• *Item(s):* {items}\n• *Status:* Pending\n\nThe customer has confirmed their order. Please contact them to finalize delivery!"
+        send_whatsapp_message(OWNER_PHONE_NUMBER, msg)
 
 def fetch_live_inventory():
     """Parses consolidated Google Sheet inventory cleanly for Groq AI."""
@@ -106,6 +134,8 @@ def webhook():
                 incoming_msg = value['messages'][0]['text']['body']
                 sender_id = value['messages'][0]['from']
                 
+                print(f"User ({sender_id}) said: {incoming_msg}")
+
                 # Log conversation for live dashboard
                 CONVERSATIONS[sender_id] = {
                     "last_message": incoming_msg,
@@ -118,19 +148,17 @@ def webhook():
 You are the official customer service assistant for Trumark Bookshop & Stationery in Kimara Stopover, Dar es Salaam.
 
 === LANGUAGE INSTRUCTION ===
-You are fully bilingual in English and Kiswahili. Respond in the exact same language used by the customer.
+Respond in the EXACT same language used by the customer (English or Kiswahili).
 
 === LIVE INVENTORY CATALOG ===
 {live_inventory}
 
-=== GUIDELINES ===
-- Help customers find books and prices.
-- DO NOT use markdown tables (`|---|`). Use bullet points (`•`).
-- IF A CUSTOMER CLEARLY WANTS TO BUY OR ORDER A BOOK (e.g. "nataka kununua", "naomba kuagiza", "I want to buy"):
-  * Acknowledge their interest warmly.
-  * Politely let them know that their request has been logged and our shop team will contact them directly to confirm and finalize the order.
-  * DO NOT state that the order is confirmed—only state that the request is received for shop team follow-up.
-  * Include the exact tag `[ORDER_DETECTED: book names]` at the very END of your response.
+=== GUIDELINES & TWO-STEP ORDER CONFIRMATION ===
+1. If a customer asks for a book or price, provide the price and ask if they would like to place an order.
+2. STEP 1 (Asking for Confirmation): If the customer expresses interest in buying (e.g. "nataka kununua", "I want to buy"), DO NOT submit the order yet. First state the book title and total price, then explicitly ask them to reply with "YES" / "NDIO" to confirm their order.
+3. STEP 2 (Customer Confirms): IF AND ONLY IF the customer explicitly confirms (e.g., says "yes", "ndio", "thibitisha", "confirm", "sawa ninaomba"), thank them, state that our shop team will contact them shortly, AND append `[ORDER_CONFIRMED: book names]` at the very end of your response.
+
+DO NOT append `[ORDER_CONFIRMED:]` until the customer has explicitly said YES / NDIO / CONFIRM.
 """
 
                 response = client.chat.completions.create(
@@ -144,53 +172,31 @@ You are fully bilingual in English and Kiswahili. Respond in the exact same lang
                 
                 reply_text = response.choices[0].message.content or ""
 
-                # Check if an order was detected
-                if "[ORDER_DETECTED:" in reply_text:
-                    # Extract book names and log order
+                # Check if an order was explicitly confirmed by the user
+                if "[ORDER_CONFIRMED:" in reply_text:
                     try:
-                        order_details = reply_text.split("[ORDER_DETECTED:")[1].split("]")[0].strip()
+                        order_details = reply_text.split("[ORDER_CONFIRMED:")[1].split("]")[0].strip()
                     except Exception:
                         order_details = incoming_msg
                     
-                    # Remove the hidden tag before sending response to customer
-                    reply_text = reply_text.split("[ORDER_DETECTED:")[0].strip()
+                    # Clean tag from customer reply
+                    reply_text = reply_text.split("[ORDER_CONFIRMED:")[0].strip()
                     
-                    # Log to Google Sheet
+                    # 1. Log to Google Sheets
                     log_order_to_sheet(sender_id, order_details)
                     
-                    # Send WhatsApp notification to shop owner
+                    # 2. Alert the owner on WhatsApp
                     send_owner_notification(sender_id, order_details)
 
                 if not reply_text.strip():
                     reply_text = "Habari! Karibu Trumark Bookshop. Tunaomba kurudia ujumbe wako au tupigie +255 753 611 005 kwa msaada zaidi."
 
-                send_whatsapp_message(sender_id, reply_text)
+                send_whatsapp_message(sender_id, reply_text.strip())
 
         except Exception as e:
             print(f"Error processing message: {e}")
             
         return "OK", 200
-
-def send_whatsapp_message(to_number, text_content):
-    """Sends a WhatsApp text message via Meta Graph API."""
-    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "text",
-        "text": {"body": text_content}
-    }
-    return requests.post(url, json=payload, headers=headers)
-
-def send_owner_notification(customer_number, items):
-    """Sends an immediate order notification alert to the shop owner's WhatsApp."""
-    if OWNER_PHONE_NUMBER:
-        msg = f"🚨 *NEW ORDER REQUEST!*\n\n• *Customer:* +{customer_number}\n• *Item(s):* {items}\n• *Status:* Pending\n\nPlease check your Google Sheet / Dashboard and contact the customer to confirm!"
-        send_whatsapp_message(OWNER_PHONE_NUMBER, msg)
 
 # ================= LIVE DASHBOARD ROUTES =================
 
@@ -198,7 +204,7 @@ DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Trumark Live Orders Dashboard</title>
+    <title>Trumark Live Dashboard</title>
     <meta http-equiv="refresh" content="30">
     <style>
         body { font-family: Arial, sans-serif; background: #f4f6f9; margin: 20px; }
@@ -209,32 +215,32 @@ DASHBOARD_HTML = """
         th { background: #2c3e50; color: white; }
         .status-pending { background: #ffeaa7; color: #d63031; font-weight: bold; padding: 4px 8px; border-radius: 4px; }
         .status-confirmed { background: #55efc4; color: #00b894; font-weight: bold; padding: 4px 8px; border-radius: 4px; }
-        .refresh-btn { background: #0984e3; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; text-decoration: none; }
+        .btn { background: #0984e3; color: white; border: none; padding: 8px 12px; border-radius: 4px; text-decoration: none; font-size: 14px; }
     </style>
 </head>
 <body>
-    <h1>📚 Trumark Bookshop — Live Orders & Chat Dashboard</h1>
-    <p>Auto-refreshes every 30 seconds. <a href="/dashboard" class="refresh-btn">🔄 Refresh Now</a> <a href="/logout" style="margin-left:10px; color:red;">Logout</a></p>
+    <h1>📚 Trumark Bookshop — Live Dashboard</h1>
+    <p>Auto-refreshes every 30 seconds. <a href="/dashboard" class="btn">🔄 Refresh Now</a> <a href="/logout" style="margin-left:10px; color:red;">Logout</a></p>
 
     <div class="card">
-        <h2>🛍️ Pending Orders (Action Required)</h2>
+        <h2>🛍️ Pending Confirmed Orders</h2>
         <table>
             <tr><th>Timestamp</th><th>Customer Number</th><th>Item(s)</th><th>Status</th></tr>
             {% for order in pending_orders %}
             <tr>
                 <td>{{ order.Timestamp }}</td>
-                <td><a href="https://wa.me/{{ order['Customer WhatsApp Number'] }}" target="_blank">+{{ order['Customer WhatsApp Number'] }} 💬 Chat</a></td>
+                <td><a href="https://wa.me/{{ order['Customer WhatsApp Number'] }}" target="_blank" class="btn">💬 Chat +{{ order['Customer WhatsApp Number'] }}</a></td>
                 <td>{{ order['Item(s)'] }}</td>
                 <td><span class="status-pending">{{ order.Status }}</span></td>
             </tr>
             {% else %}
-            <tr><td colspan="4">No pending orders.</td></tr>
+            <tr><td colspan="4">No pending confirmed orders found in Google Sheet.</td></tr>
             {% endfor %}
         </table>
     </div>
 
     <div class="card">
-        <h2>✅ Confirmed Orders</h2>
+        <h2>✅ Completed Orders</h2>
         <table>
             <tr><th>Timestamp</th><th>Customer Number</th><th>Item(s)</th><th>Status</th></tr>
             {% for order in confirmed_orders %}
@@ -245,7 +251,7 @@ DASHBOARD_HTML = """
                 <td><span class="status-confirmed">{{ order.Status }}</span></td>
             </tr>
             {% else %}
-            <tr><td colspan="4">No confirmed orders yet.</td></tr>
+            <tr><td colspan="4">No completed orders yet.</td></tr>
             {% endfor %}
         </table>
     </div>
@@ -256,12 +262,12 @@ DASHBOARD_HTML = """
             <tr><th>Customer Number</th><th>Last Message</th><th>Time</th></tr>
             {% for phone, data in conversations.items() %}
             <tr>
-                <td><a href="https://wa.me/{{ phone }}" target="_blank">+{{ phone }}</a></td>
+                <td><a href="https://wa.me/{{ phone }}" target="_blank" class="btn">+{{ phone }}</a></td>
                 <td>{{ data.last_message }}</td>
                 <td>{{ data.timestamp }}</td>
             </tr>
             {% else %}
-            <tr><td colspan="3">No active chats recorded since last app restart.</td></tr>
+            <tr><td colspan="3">No active chats recorded yet.</td></tr>
             {% endfor %}
         </table>
     </div>
@@ -283,10 +289,10 @@ LOGIN_HTML = """
 </head>
 <body>
     <div class="login-card">
-        <h2>🔐 Trumark Admin</h2>
+        <h2>🔐 Trumark Admin Login</h2>
         {% if error %}<p style="color:red;">{{ error }}</p>{% endif %}
         <form method="POST" action="/login">
-            <input type="password" name="password" placeholder="Enter Dashboard Password" required><br>
+            <input type="password" name="password" placeholder="Enter Password" required><br>
             <button type="submit">Login</button>
         </form>
     </div>
@@ -318,7 +324,6 @@ def dashboard():
     pending_orders = []
     confirmed_orders = []
     
-    # Read live orders from the same Orders tab in Google Sheets
     try:
         gc = get_gspread_client()
         if gc:
@@ -330,7 +335,7 @@ def dashboard():
                 status = str(row.get("Status", "")).strip().capitalize()
                 if status == "Pending":
                     pending_orders.append(row)
-                elif status == "Confirmed":
+                elif status in ["Confirmed", "Completed"]:
                     confirmed_orders.append(row)
     except Exception as e:
         print(f"Error loading dashboard orders: {e}")
