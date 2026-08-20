@@ -20,37 +20,28 @@ client = Groq(api_key=GROQ_API_KEY)
 def fetch_live_inventory():
     """Fetches real-time inventory from Google Sheets, ignoring missing headers."""
     try:
-        # Read the CSV without expecting specific headers
         df = pd.read_csv(CSV_URL, header=None)
         
         inventory_summary = ""
-        # Drop completely empty rows and columns
         df = df.dropna(how='all').dropna(axis=1, how='all')
         
-        # Iterate through rows and find valid items (Subject + Price)
         for index, row in df.iterrows():
-            # Filter out empty cells and convert to strings
             row_vals = [str(x).strip() for x in row.values if pd.notna(x)]
             
             if len(row_vals) >= 2:
-                # The price is usually the last column
                 possible_price = row_vals[-1].replace(',', '').replace('.0', '')
                 
-                # If the last item is a price (a number over 500)
                 if possible_price.isdigit() and int(possible_price) > 500:
                     title = " ".join(row_vals[:-1])
                     
-                    # Remove the row number (like '1', '2') from the beginning of the title
                     if title.split(" ")[0].isdigit():
                         title = " ".join(title.split(" ")[1:])
                         
-                    # Skip summary/total rows
                     if "TOTAL" not in title.upper():
-                        # Assume stock is available since it's on the price list
                         inventory_summary += f"- {title}: {possible_price} TZS (In Stock)\n"
                         
         if not inventory_summary:
-            return "Inventory data currently unavailable (No valid items found)."
+            return "Inventory data currently unavailable."
             
         return inventory_summary
     except Exception as e:
@@ -86,13 +77,10 @@ def webhook():
                 
                 print(f"User ({sender_id}) said: {incoming_msg}")
 
-                # 1. Get real-time inventory from Google Sheet
+                # Fetch inventory and print character count to logs
                 live_inventory = fetch_live_inventory()
+                print(f"DEBUG: Live Inventory Length = {len(live_inventory)} characters")
 
-                # Print the inventory length in Render logs to see if data was fetched
-print(f"DEBUG: Live Inventory Length = {len(live_inventory)} characters")
-
-                # 2. Build the system prompt cleanly
                 system_prompt = f"""
 You are the official AI assistant for Trumark Bookshop & Stationery.
 
@@ -107,14 +95,13 @@ You are the official AI assistant for Trumark Bookshop & Stationery.
 
 === BOT GUIDELINES ===
 - Answer customer questions accurately using the LIVE INVENTORY list above.
-- If a book is in stock (Stock > 0), provide the price and invite them to place an order or visit the shop.
-- If a book has 0 stock or is not listed, inform the customer that it can be special-ordered within 3 business days.
+- If a book is in stock, provide the price and invite them to place an order or visit the shop.
+- If a book is not found in the list or inventory is unavailable, politely inform the customer that it can be special-ordered within 3 business days.
 - Keep WhatsApp replies polite, helpful, and concise.
 """
 
-                # 3. Call Groq AI (Updated to standard Llama 3 model)
                 response = client.chat.completions.create(
-                    model="openai/gpt-oss-20b", 
+                    model="openai/gpt-oss-20b",
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": incoming_msg}
@@ -123,7 +110,6 @@ You are the official AI assistant for Trumark Bookshop & Stationery.
                 )
                 reply_text = response.choices[0].message.content
 
-                # 4. Send WhatsApp Response
                 url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
                 headers = {
                     "Authorization": f"Bearer {WHATSAPP_TOKEN}",
