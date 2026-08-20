@@ -11,7 +11,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = "1331551090031101"
 
-# Replace this with your actual Google Spreadsheet ID
+# Your Google Spreadsheet ID
 SPREADSHEET_ID = "1iVDKEyo1R8sUOd5h_XpEdXWYgBbj16Kl"
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv"
 
@@ -63,27 +63,11 @@ def webhook():
                 
                 print(f"User ({sender_id}) said: {incoming_msg}")
 
-                # Get real-time inventory from Google Sheet
-                def fetch_live_inventory():
-    """Fetches real-time inventory from Google Sheets."""
-    try:
-        df = pd.read_csv(CSV_URL)
-        
-        # Clean up hidden spaces in column headers to prevent KeyErrors
-        df.columns = df.columns.str.strip()
-        
-        # Convert spreadsheet rows into a readable summary for AI
-        inventory_summary = ""
-        for _, row in df.iterrows():
-            inventory_summary += f"- {row['Title']} by {row['Author']}: {row['Price']} TZS (Stock: {row['Stock']})\n"
-        return inventory_summary
-    except Exception as e:
-        print(f"Error fetching inventory from Google Sheets: {e}")
-        return "Inventory data currently unavailable."
-You are the official AI assistant for Trumark Bookshop & Stationery.
+                # 1. Get real-time inventory from Google Sheet
+                live_inventory = fetch_live_inventory()
 
-# Make sure your system_prompt looks like this string block:
-system_prompt = f"""
+                # 2. Build the system prompt cleanly
+                system_prompt = f"""
 You are the official AI assistant for Trumark Bookshop & Stationery.
 
 === STORE INFORMATION ===
@@ -94,7 +78,6 @@ You are the official AI assistant for Trumark Bookshop & Stationery.
 
 === LIVE INVENTORY CATALOG ===
 {live_inventory}
-"""
 
 === BOT GUIDELINES ===
 - Answer customer questions accurately using the LIVE INVENTORY list above.
@@ -103,9 +86,9 @@ You are the official AI assistant for Trumark Bookshop & Stationery.
 - Keep WhatsApp replies polite, helpful, and concise.
 """
 
-                # Call Groq AI
+                # 3. Call Groq AI (Updated to standard Llama 3 model)
                 response = client.chat.completions.create(
-                    model="openai/gpt-oss-20b",
+                    model="llama3-8b-8192", 
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": incoming_msg}
@@ -114,7 +97,7 @@ You are the official AI assistant for Trumark Bookshop & Stationery.
                 )
                 reply_text = response.choices[0].message.content
 
-                # Send WhatsApp Response
+                # 4. Send WhatsApp Response
                 url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
                 headers = {
                     "Authorization": f"Bearer {WHATSAPP_TOKEN}",
