@@ -88,7 +88,7 @@ You are the official AI assistant for Trumark Bookshop & Stationery.
 
                 # 3. Call Groq AI (Updated to standard Llama 3 model)
                 response = client.chat.completions.create(
-                    model="llama3-8b-8192", 
+                    model="openai/gpt-oss-20b", 
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": incoming_msg}
