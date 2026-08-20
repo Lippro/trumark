@@ -21,8 +21,9 @@ CSV_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# Store recent conversations in memory for the dashboard
+# Global trackers
 CONVERSATIONS = {}
+PENDING_CONFIRMATIONS = {}
 
 def get_gspread_client():
     """Connects to Google Sheets using the JSON credentials stored in Render."""
@@ -32,7 +33,7 @@ def get_gspread_client():
         
         creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
         if not creds_json:
-            print("ERROR: GOOGLE_CREDENTIALS_JSON environment variable is missing!")
+            print("ERROR: GOOGLE_CREDENTIALS_JSON variable is missing in Render!")
             return None
         
         creds_dict = json.loads(creds_json)
@@ -59,8 +60,6 @@ def log_order_to_sheet(customer_number, items_requested):
             worksheet.append_row([now_str, str(customer_number), items_requested, "Pending"])
             print(f"SUCCESS: Order logged to Google Sheet for {customer_number}")
             return True
-        else:
-            print("FAILED: Could not authenticate with Google Sheets.")
     except Exception as e:
         print(f"Error logging order to sheet: {e}")
     return False
@@ -85,7 +84,7 @@ def send_whatsapp_message(to_number, text_content):
 def send_owner_notification(customer_number, items):
     """Sends an immediate order notification alert to the shop owner's WhatsApp."""
     if OWNER_PHONE_NUMBER:
-        msg = f"🚨 *NEW CONFIRMED ORDER!*\n\n• *Customer:* +{customer_number}\n• *Item(s):* {items}\n• *Status:* Pending\n\nThe customer has confirmed their order. Please contact them to finalize delivery!"
+        msg = f"🚨 *NEW CONFIRMED ORDER!*\n\n• *Customer:* +{customer_number}\n• *Item(s):* {items}\n• *Status:* Pending\n\nThe customer confirmed their order. Contact them to finalize delivery!"
         send_whatsapp_message(OWNER_PHONE_NUMBER, msg)
 
 def fetch_live_inventory():
@@ -109,9 +108,11 @@ def fetch_live_inventory():
         print(f"Error fetching inventory: {e}")
         return "Inventory data currently unavailable."
 
+# ================= PUBLIC & WEBHOOK ROUTES =================
+
 @app.route('/', methods=['GET'])
 def home():
-    return "Trumark Bot is Live!", 200
+    return "Trumark Bot & Dashboard are Active!", 200
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
@@ -131,34 +132,49 @@ def webhook():
             value = changes['value']
             
             if 'messages' in value:
-                incoming_msg = value['messages'][0]['text']['body']
+                incoming_msg = value['messages'][0]['text']['body'].strip()
                 sender_id = value['messages'][0]['from']
                 
                 print(f"User ({sender_id}) said: {incoming_msg}")
 
-                # Log conversation for live dashboard
                 CONVERSATIONS[sender_id] = {
                     "last_message": incoming_msg,
                     "timestamp": datetime.now().strftime("%H:%M:%S")
                 }
 
-                live_inventory = fetch_live_inventory()
+                # Handle Direct Order Confirmations (Yes / Ndio)
+                clean_input = incoming_msg.lower()
+                if sender_id in PENDING_CONFIRMATIONS and clean_input in ["yes", "ndio", "thibitisha", "sawa", "confirm", "ok"]:
+                    pending_item = PENDING_CONFIRMATIONS.pop(sender_id)
+                    log_order_to_sheet(sender_id, pending_item)
+                    send_owner_notification(sender_id, pending_item)
+                    
+                    if clean_input in ["ndio", "thibitisha", "sawa"]:
+                        confirm_msg = f"Asante sana! Oda yako ya *{pending_item}* imethibitishwa. Timu yetu ya duka itawasiliana nawe hivi punde."
+                    else:
+                        confirm_msg = f"Thank you! Your order for *{pending_item}* has been confirmed. Our team will contact you shortly."
+                    
+                    send_whatsapp_message(sender_id, confirm_msg)
+                    return "OK", 200
 
+                # Standard Groq AI completion
+                live_inventory = fetch_live_inventory()
                 system_prompt = f"""
 You are the official customer service assistant for Trumark Bookshop & Stationery in Kimara Stopover, Dar es Salaam.
 
-=== LANGUAGE INSTRUCTION ===
+=== LANGUAGE ===
 Respond in the EXACT same language used by the customer (English or Kiswahili).
 
-=== LIVE INVENTORY CATALOG ===
+=== LIVE INVENTORY ===
 {live_inventory}
 
-=== GUIDELINES & TWO-STEP ORDER CONFIRMATION ===
-1. If a customer asks for a book or price, provide the price and ask if they would like to place an order.
-2. STEP 1 (Asking for Confirmation): If the customer expresses interest in buying (e.g. "nataka kununua", "I want to buy"), DO NOT submit the order yet. First state the book title and total price, then explicitly ask them to reply with "YES" / "NDIO" to confirm their order.
-3. STEP 2 (Customer Confirms): IF AND ONLY IF the customer explicitly confirms (e.g., says "yes", "ndio", "thibitisha", "confirm", "sawa ninaomba"), thank them, state that our shop team will contact them shortly, AND append `[ORDER_CONFIRMED: book names]` at the very end of your response.
-
-DO NOT append `[ORDER_CONFIRMED:]` until the customer has explicitly said YES / NDIO / CONFIRM.
+=== GUIDELINES ===
+- Search inventory for requested books.
+- DO NOT use markdown tables (`|---|`). Use bullet points (`•`).
+- IF A CUSTOMER WANTS TO BUY OR ORDER A BOOK (e.g. "nataka kununua", "naomba kuagiza", "I want to buy"):
+  * Provide the book title and price in TZS.
+  * Ask them explicitly to reply with "YES" or "NDIO" to confirm their order.
+  * Append `[PENDING_ORDER: exact book title and price]` at the very END of your response.
 """
 
                 response = client.chat.completions.create(
@@ -172,21 +188,14 @@ DO NOT append `[ORDER_CONFIRMED:]` until the customer has explicitly said YES / 
                 
                 reply_text = response.choices[0].message.content or ""
 
-                # Check if an order was explicitly confirmed by the user
-                if "[ORDER_CONFIRMED:" in reply_text:
+                if "[PENDING_ORDER:" in reply_text:
                     try:
-                        order_details = reply_text.split("[ORDER_CONFIRMED:")[1].split("]")[0].strip()
+                        pending_item = reply_text.split("[PENDING_ORDER:")[1].split("]")[0].strip()
                     except Exception:
-                        order_details = incoming_msg
+                        pending_item = incoming_msg
                     
-                    # Clean tag from customer reply
-                    reply_text = reply_text.split("[ORDER_CONFIRMED:")[0].strip()
-                    
-                    # 1. Log to Google Sheets
-                    log_order_to_sheet(sender_id, order_details)
-                    
-                    # 2. Alert the owner on WhatsApp
-                    send_owner_notification(sender_id, order_details)
+                    PENDING_CONFIRMATIONS[sender_id] = pending_item
+                    reply_text = reply_text.split("[PENDING_ORDER:")[0].strip()
 
                 if not reply_text.strip():
                     reply_text = "Habari! Karibu Trumark Bookshop. Tunaomba kurudia ujumbe wako au tupigie +255 753 611 005 kwa msaada zaidi."
@@ -198,7 +207,7 @@ DO NOT append `[ORDER_CONFIRMED:]` until the customer has explicitly said YES / 
             
         return "OK", 200
 
-# ================= LIVE DASHBOARD ROUTES =================
+# ================= DASHBOARD HTML & ROUTES =================
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
