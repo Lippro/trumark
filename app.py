@@ -89,6 +89,9 @@ def webhook():
                 # 1. Get real-time inventory from Google Sheet
                 live_inventory = fetch_live_inventory()
 
+                # Print the inventory length in Render logs to see if data was fetched
+print(f"DEBUG: Live Inventory Length = {len(live_inventory)} characters")
+
                 # 2. Build the system prompt cleanly
                 system_prompt = f"""
 You are the official AI assistant for Trumark Bookshop & Stationery.
