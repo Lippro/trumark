@@ -1,5 +1,7 @@
 flask
 requests
-groq
 pandas
+groq
+gspread
+oauth2client
 gunicorn
