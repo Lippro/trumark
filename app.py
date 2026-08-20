@@ -11,14 +11,14 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = "1331551090031101"
 
-# Your Google Spreadsheet ID
-SPREADSHEET_ID = "1iVDKEyo1R8sUOd5h_XpEdXWYgBbj16Kl"
+# Updated to your Google Spreadsheet ID
+SPREADSHEET_ID = "1DlRusdmea8CxpbCaHJmyMXYcJiqF83On"
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv"
 
 client = Groq(api_key=GROQ_API_KEY)
 
 def fetch_live_inventory():
-    """Fetches real-time inventory from Google Sheets, ignoring missing headers."""
+    """Parses consolidated Google Sheet inventory cleanly for Groq AI."""
     try:
         df = pd.read_csv(CSV_URL, header=None)
         
@@ -26,18 +26,23 @@ def fetch_live_inventory():
         df = df.dropna(how='all').dropna(axis=1, how='all')
         
         for index, row in df.iterrows():
-            row_vals = [str(x).strip() for x in row.values if pd.notna(x)]
+            vals = [str(x).strip() for x in row.values if pd.notna(x)]
             
-            if len(row_vals) >= 2:
-                possible_price = row_vals[-1].replace(',', '').replace('.0', '')
+            if len(vals) >= 2:
+                # Get the price from the last non-empty column
+                possible_price = vals[-1].replace(',', '').replace('.0', '')
                 
                 if possible_price.isdigit() and int(possible_price) > 500:
-                    title = " ".join(row_vals[:-1])
+                    # Filter out purely numeric item numbers (1, 2, 3) and column headers
+                    clean_parts = []
+                    for v in vals[:-1]:
+                        if v.isdigit() or v.lower() in ['no.', 'level', 'subject', 'price (tzs)']:
+                            continue
+                        clean_parts.append(v)
                     
-                    if title.split(" ")[0].isdigit():
-                        title = " ".join(title.split(" ")[1:])
-                        
-                    if "TOTAL" not in title.upper():
+                    title = " ".join(clean_parts)
+                    
+                    if "TOTAL" not in title.upper() and title:
                         inventory_summary += f"- {title}: {possible_price} TZS (In Stock)\n"
                         
         if not inventory_summary:
@@ -77,10 +82,11 @@ def webhook():
                 
                 print(f"User ({sender_id}) said: {incoming_msg}")
 
-                # Fetch inventory and print character count to logs
+                # 1. Fetch real-time inventory from Google Sheet
                 live_inventory = fetch_live_inventory()
                 print(f"DEBUG: Live Inventory Length = {len(live_inventory)} characters")
 
+                # 2. Build system prompt
                 system_prompt = f"""
 You are the official AI assistant for Trumark Bookshop & Stationery.
 
@@ -95,11 +101,13 @@ You are the official AI assistant for Trumark Bookshop & Stationery.
 
 === BOT GUIDELINES ===
 - Answer customer questions accurately using the LIVE INVENTORY list above.
-- If a book is in stock, provide the price and invite them to place an order or visit the shop.
-- If a book is not found in the list or inventory is unavailable, politely inform the customer that it can be special-ordered within 3 business days.
+- Match book requests even if the user searches loosely (e.g., "Form 4 Chemistry" -> match "Form Four Chemistry").
+- If a book is found, state the price (in TZS) and invite them to visit or order.
+- If a requested book is NOT found or inventory is unavailable, state that it can be special-ordered within 3 business days.
 - Keep WhatsApp replies polite, helpful, and concise.
 """
 
+                # 3. Call Groq AI
                 response = client.chat.completions.create(
                     model="openai/gpt-oss-20b",
                     messages=[
@@ -110,6 +118,7 @@ You are the official AI assistant for Trumark Bookshop & Stationery.
                 )
                 reply_text = response.choices[0].message.content
 
+                # 4. Send WhatsApp Response
                 url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
                 headers = {
                     "Authorization": f"Bearer {WHATSAPP_TOKEN}",
