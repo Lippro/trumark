@@ -4,13 +4,13 @@ import requests
 import pandas as pd
 from datetime import datetime
 from flask import Flask, request, render_template_string, redirect, url_for, session
-from groq import Groq
+import anthropic
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "trumark_secret_key_987")
 
 VERIFY_TOKEN = "trumark_books_123"
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+ANTHROPIC_API_KEY = os.environ.get("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")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = "1331551090031101"
 OWNER_PHONE_NUMBER = os.environ.get("OWNER_PHONE_NUMBER", "255753611005")
@@ -19,7 +19,8 @@ DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "Trumark2026!")
 SPREADSHEET_ID = "1DlRusdmea8CxpbCaHJmyMXYcJiqF83On"
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/gviz/tq?tqx=out:csv"
 
-client = Groq(api_key=GROQ_API_KEY)
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"  # fast + cheap, good fit for catalog lookups & order flow
 
 # Global trackers
 CONVERSATIONS = {}
@@ -88,7 +89,7 @@ def send_owner_notification(customer_number, items):
         send_whatsapp_message(OWNER_PHONE_NUMBER, msg)
 
 def fetch_live_inventory():
-    """Parses consolidated Google Sheet inventory cleanly for Groq AI."""
+    """Parses consolidated Google Sheet inventory cleanly for Claude."""
     try:
         df = pd.read_csv(CSV_URL, header=None)
         inventory_summary = ""
@@ -157,7 +158,7 @@ def webhook():
                     send_whatsapp_message(sender_id, confirm_msg)
                     return "OK", 200
 
-                # Standard Groq AI completion
+                # Standard Claude AI completion
                 live_inventory = fetch_live_inventory()
                 system_prompt = f"""
 You are the official customer service assistant for Trumark Bookshop & Stationery in Kimara Stopover, Dar es Salaam.
@@ -177,16 +178,19 @@ Respond in the EXACT same language used by the customer (English or Kiswahili).
   * Append `[PENDING_ORDER: exact book title and price]` at the very END of your response.
 """
 
-                response = client.chat.completions.create(
-                    model="openai/gpt-oss-20b",
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": incoming_msg}
-                    ],
-                    max_tokens=300
-                )
-                
-                reply_text = response.choices[0].message.content or ""
+                try:
+                    response = client.messages.create(
+                        model=CLAUDE_MODEL,
+                        max_tokens=300,
+                        system=system_prompt,
+                        messages=[
+                            {"role": "user", "content": incoming_msg}
+                        ]
+                    )
+                    reply_text = response.content[0].text if response.content else ""
+                except Exception as e:
+                    print(f"Claude API Error: {e}")
+                    reply_text = ""
 
                 if "[PENDING_ORDER:" in reply_text:
                     try:
