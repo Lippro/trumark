@@ -1,7 +1,7 @@
 flask
 requests
 pandas
-groq
+anthropic
 gspread
 oauth2client
 gunicorn
